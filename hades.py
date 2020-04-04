@@ -112,18 +112,19 @@ class Hades:
 
         # call keras for model relearning
 
+        return
+
     """on_request will handle a request for a new model. A server may ask for
     a new model via this handler.
     """
     def on_request(self, client, userdata, msg):
-        print(msg.topic + " received")
         _, net, mac, _ = hades_utils.split_segments4(msg.topic)
 
         if not hades_utils.verify_mac(mac):
             logging.info("MAC address (%s) is invalid!", mac)
 
         # does a model for this device exist?
-        if self.check(mac):
+        if hades_utils.check_model(mac):
             modelMac = self.models_dir + "/" + mac + ".tflite"
 
             f = open(modelMac, 'rb')
@@ -137,16 +138,10 @@ class Hades:
         else:
             logging.info("no model for node (%s)", mac)
 
-
-    """check will check whether a model exists for a particular device and
-    will return True if it does exist.
-    """
-    def check(self, mac):
-        return path.exists(self.models_dir + "/" + mac + ".tflite")
+        return
 
     def on_log(self, client, level, buf):
         logging.debug(buf)
-
 
     """main shall be the entry point for this function and will setup required
     connections for MQTT broker and other required services.
@@ -184,6 +179,7 @@ class Hades:
 
         while True:
             self.client.loop_forever()
+        return
 
 
 if __name__ == '__main__':

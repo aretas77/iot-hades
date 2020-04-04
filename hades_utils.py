@@ -15,4 +15,8 @@ def verify_mac(mac):
         return True
     return False
 
-
+"""check_mode will check whether a model exists for a particular device and
+   will return True if it does exist.
+"""
+def check_model(models_dir, mac):
+    return path.exists(models_dir + "/" + mac + ".tflite")
