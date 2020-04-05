@@ -1,4 +1,5 @@
 import re
+from os import path
 
 """split_segments4 will split the given segment into 4 splits and return the
 token to the caller.

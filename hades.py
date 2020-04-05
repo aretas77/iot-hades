@@ -1,4 +1,4 @@
-#!/usb/bin/python
+#!/usr/bin/python
 
 import os
 import socket
@@ -6,7 +6,7 @@ import logging
 import hades_utils
 import json
 import configparser
-from time import time
+import time
 from select import select
 from os import path
 
@@ -102,6 +102,8 @@ class Hades:
 
     """on_stats will handle the received messages of a devices statistics,
     when data is received, it will send this data for analyze.
+
+    endpoint: /hades/+/+/statistics
     """
     def on_stats(self, client, userdata, msg):
         # json.loads(msg.payload)
@@ -116,6 +118,8 @@ class Hades:
 
     """on_request will handle a request for a new model. A server may ask for
     a new model via this handler.
+
+    endpoint: /hades/+/+/hades/models/request
     """
     def on_request(self, client, userdata, msg):
         _, net, mac, _ = hades_utils.split_segments4(msg.topic)
@@ -124,17 +128,31 @@ class Hades:
             logging.info("MAC address (%s) is invalid!", mac)
 
         # does a model for this device exist?
-        if hades_utils.check_model(mac):
+        if hades_utils.check_model(self.models_dir, mac):
             modelMac = self.models_dir + "/" + mac + ".tflite"
 
+            # prepare data
             f = open(modelMac, 'rb')
-            data = f.read()
-            byteArray = bytes(data)
+            byteArray = bytes(f.read())
+            f.close()
+
+            timeSent = time.localtime()
+            currentTime = json.dumps({
+                "model": modelMac,
+                "time_sent": time.strftime("%H:%M:%S", timeSent)
+            })
 
             # construct publish topic
             topic = f"node/{net}/{mac}/hades/model/receive"
+            topicEvent = f"node/{net}/{mac}/hades/event/sent"
+
             logging.debug("publishing on %s", topic)
             self.client.publish(topic, byteArray, 0)
+
+            # Notify Iotctl about a sent model
+            # TODO: implement an Event infrastructure.
+            logging.debug("publishing on %s", topicEvent)
+            self.client.publish(topicEvent, currentTime, 0)
         else:
             logging.info("no model for node (%s)", mac)
 
@@ -151,7 +169,7 @@ class Hades:
 
         # TODO: make distinct init functions for different services.
         self.disconnected = (False, None)
-        self.t = time()
+        self.t = time.time()
         self.state = 0
 
         self.client = mqtt.Client(client_id=self.client_id)
@@ -169,7 +187,6 @@ class Hades:
 
         # Handle connections
         self.client.username_pw_set(mqttConfig["user"], mqttConfig["password"])
-      
         try:
             self.client.connect(mqttConfig["server"], int(mqttConfig["port"]))
         except:
