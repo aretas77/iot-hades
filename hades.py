@@ -66,6 +66,7 @@ class Hades:
         self.config = config
         self.client_id="hades"
         self.models_dir="./models"
+        self.hermesPrefix = "hermes"
 
     """on_connect will be called when the MQTT client connects to the MQTT
     broker.
@@ -117,7 +118,8 @@ class Hades:
         return
 
     """on_request will handle a request for a new model. A server may ask for
-    a new model via this handler.
+    a new model via this handler and the handler should respond with a new
+    model.
 
     endpoint: /hades/+/+/hades/models/request
     """
@@ -143,7 +145,7 @@ class Hades:
             })
 
             # construct publish topic
-            topic = f"node/{net}/{mac}/hades/model/receive"
+            topic = f"{self.hermesPrefix}/node/{net}/{mac}/hades/model/receive"
             topicEvent = f"node/{net}/{mac}/hades/event/sent"
 
             logging.debug("publishing on %s", topic)
