@@ -18,11 +18,15 @@ except ImportError:
 def start():
     logging.basicConfig(level=logging.DEBUG)
 
+    # parse the hades config
     config = HadesConfig("hades.conf")
     config.parseConfig()
 
+    # start the client program with parsed config
     client = Hades(config)
     client.main()
+
+    return 0
 
 class HadesConfig:
 
@@ -84,6 +88,7 @@ class Hades:
     def subscribe(self):
         topics = {
             "hades/+/+/statistics": self.on_stats,
+            "hades/+/+/ping": self.on_ping,
             "hades/+/+/model/request": self.on_request
         }
 
@@ -121,7 +126,7 @@ class Hades:
     a new model via this handler and the handler should respond with a new
     model.
 
-    endpoint: /hades/+/+/hades/models/request
+    endpoint: /hades/+/+/model/request
     """
     def on_request(self, client, userdata, msg):
         _, net, mac, _ = hades_utils.split_segments4(msg.topic)
@@ -144,21 +149,34 @@ class Hades:
                 "time_sent": time.strftime("%H:%M:%S", timeSent)
             })
 
-            # construct publish topic
+            # construct publish topics for hermes and iotctl.
             topic = f"{self.hermesPrefix}/node/{net}/{mac}/hades/model/receive"
             topicEvent = f"node/{net}/{mac}/hades/event/sent"
 
             logging.debug("publishing on %s", topic)
             self.client.publish(topic, byteArray, 0)
 
-            # Notify Iotctl about a sent model
+            # Notify IoT Controller about a sent model
             # TODO: implement an Event infrastructure.
             logging.debug("publishing on %s", topicEvent)
             self.client.publish(topicEvent, currentTime, 0)
         else:
             logging.info("no model for node (%s)", mac)
-
         return
+    
+    """on_ping will handle a request for a ping checking. A device may ask for
+    a ping check and we should respond to it.
+    """
+    def on_ping(self, client, userdata, msg):
+        _, net, mac, _ = hades_utils.split_segments4(msg.topic)
+
+        if not hades_utils.verify_mac(mac):
+            logging.info("MAC address (%s) is invalid!", mac)
+            return
+
+        topic = f"{self.hermesPrefix}/node/{net}/{mac}/hades/pong"
+        logging.debug("publishing on %s", topic)
+        self.client.publish(topic, None, 0)
 
     def on_log(self, client, level, buf):
         logging.debug(buf)
@@ -200,6 +218,6 @@ class Hades:
             self.client.loop_forever()
         return
 
-
+# Main entry point
 if __name__ == '__main__':
     start()
