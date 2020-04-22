@@ -27,9 +27,14 @@ class SensorEnv(py_environment.PyEnvironment):
     REWARD_DO_NOTHING = np.asarray(0., dtype=np.float32)
     REWARD_OUT_OF_BOUNDS = np.asarray(-2., dtype=np.float32)
 
+    REWARD_CORRECT_ACTION = np.assarray(1., dtype=np.float32)
+    REWARD_INCORRECT_ACTION = np.asarray(-2., dtype=np.float32)
+
     REWARD_WITHIN_BOUNDS.setflags(write=False)
     REWARD_OUT_OF_BOUNDS.setflags(write=False)
     REWARD_DO_NOTHING.setflags(write=False)
+    REWARD_INCORRECT_ACTION.setflags(write=False)
+    REWARD_CORRECT_ACTION.setflags(write=False)
 
     def __init__(self, discount=0.5, delta=3):
         super(SensorEnv, self).__init__()
@@ -106,7 +111,9 @@ class SensorEnv(py_environment.PyEnvironment):
         f = open("recv/AA:BB:CC:DD:EE:FF.txt", "r")
         temperature = 0.0
         for _ in range(self._line):
-            temperature = float(f.readline())
+            temperature = self.num(f.readline())
+        f.close()
+
         if self._line == 1:
             self._previous_temperature = temperature
 
@@ -214,30 +221,37 @@ class SensorEnv(py_environment.PyEnvironment):
         new_interval = n_interval
         old_interval = o_interval
 
-        # if we got a negative reward and action was -1 - we reward.
+        # if we got a negative reward and action was 1 - we reward.
         if new_interval < old_interval and reward < 0:
-            return self.REWARD_WITHIN_BOUNDS, new_interval
+            return self.REWARD_CORRECT_ACTION, new_interval
 
         # if we got a positive reward and needed to adjust, it means we can
         # increase the send interval. However, if we haven't adjusted it,
         # punish with negative reward.
-        if reward > 0 and new_interval < old_interval:
-            return self.REWARD_OUT_OF_BOUNDS, new_interval
+        if reward > 0 and new_interval <= old_interval:
+            return self.REWARD_INCORRECT_ACTION, new_interval
 
         # if we increased the send interval but the delta was too big. Reward
-        # with a negative reward. Decrease the interval
+        # with a negative reward and decrease the send interval.
         if new_interval > old_interval and delta < current_delta:
             if old_interval > 1:
-                return self.REWARD_OUT_OF_BOUNDS, old_interval - 1
+                return self.REWARD_INCORRECT_ACTION, old_interval - 1
             else:
-                return self.REWARD_OUT_OF_BOUNDS, old_interval
+                return self.REWARD_INCORRECT_ACTION, old_interval
 
         # if we decremented and the delta was too big - reward!
         if new_interval < old_interval and delta < current_delta:
-            return self.REWARD_WITHIN_BOUNDS, new_interval
+            return self.REWARD_CORRECT_ACTION, new_interval
 
         # if we can increase but haven't - negative reward.
         if current_delta < (delta - 0.5) and new_interval == old_interval:
-            return self.REWARD_OUT_OF_BOUNDS, new_interval + 1
+            return self.REWARD_INCORRECT_ACTION, new_interval + 1
 
+        # just in case return
         return reward, new_interval
+
+    def num(self, string):
+        try:
+            return float(string)
+        except ValueError:
+            return int(string)
