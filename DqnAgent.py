@@ -3,7 +3,6 @@ import logging
 
 try:
     import tensorflow as tf
-    import numpy as np
     try:
         from SensorEnvironment import SensorEnv
         from tf_agents.trajectories import trajectory
@@ -12,8 +11,6 @@ try:
         from tf_agents.networks import q_network
         from tf_agents.replay_buffers import tf_uniform_replay_buffer as replay
         from tf_agents.policies import policy_saver
-        from tf_agents.metrics import py_metrics
-        from tf_agents.metrics import tf_metrics
         from tf_agents.utils import common
     except ImportError:
         print("failed to import libraries")
@@ -24,20 +21,15 @@ except ImportError:
 class DqnAgent:
 
     # Hyperparameters for the network
-    fc_layer_params = 100
     learning_rate = 1
     log_interval = 1
-
     collect_steps_per_iteration = 1
     replay_buffer_max_length = 100000
-
-    initial_temperature = True
     initial_step = True
-
-    devices = []
 
     def __init__(self):
         # Dictionaries that keep parts of DqnAgent for different devices
+        self.devices = []
         self.env = {}
         self.train_env = {}
         self.train_checkpointer = {}
@@ -124,6 +116,9 @@ class DqnAgent:
             deployment.
             - agent.collect_policy is a second policy that is used for data
             collection.
+
+            We use the default ones, atlthough, it would be better to make
+            custom ones.
         """
         self.eval_policy[mac] = agent.policy
         self.collect_policy[mac] = agent.collect_policy
@@ -161,18 +156,6 @@ class DqnAgent:
 
         return
 
-    """
-        Methods to process the environment.
-    """
-
-    def update_temperature(self, temperature):
-        if self.initial_temperature:
-            self.current_temperature = temperature
-            self.previous_temperature = temperature
-        else:
-            self.temperature_delta = abs(temperature -
-                                         self.previous_temperature)
-
     def collect_step(self, env, policy, buffer):
         """Collects the current time step of the environment and maps the
         current time_step to action in Q-table.
@@ -187,10 +170,7 @@ class DqnAgent:
             buffer.add_batch(traj)
 
         time_step = env.current_time_step()
-        print(time_step)
         action_step = policy.action(time_step)
-        print(action_step)
-        print('\n')
         next_time_step = env.step(action_step.action)
         traj = trajectory.from_transition(time_step, action_step,
                                           next_time_step)
@@ -228,11 +208,4 @@ class DqnAgent:
 
         self.train_checkpointer[mac].save(self.global_step[mac])
         self.policy_saver[mac].save(self.policy_dirs[mac])
-        # step = self.agent.train_step_counter.numpy()
-
-
-logging.basicConfig(level=logging.DEBUG)
-
-net = DqnAgent()
-net.add_device("test")
-net.train("test")
+        # step = self.agent[mac].train_step_counter.numpy()
