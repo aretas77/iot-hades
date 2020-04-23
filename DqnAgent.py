@@ -1,15 +1,24 @@
-import numpy as np
-import tensorflow as tf
-from SensorEnvironment import SensorEnv
-from tf_agents.trajectories import trajectory
-from tf_agents.environments import tf_py_environment
-from tf_agents.agents.dqn import dqn_agent
-from tf_agents.networks import q_network
-from tf_agents.replay_buffers import tf_uniform_replay_buffer
-from tf_agents.metrics import py_metrics
-from tf_agents.metrics import tf_metrics
-from tf_agents.drivers import dynamic_episode_driver
-from tf_agents.utils import common
+import os
+import logging
+
+try:
+    import tensorflow as tf
+    import numpy as np
+    try:
+        from SensorEnvironment import SensorEnv
+        from tf_agents.trajectories import trajectory
+        from tf_agents.environments import tf_py_environment
+        from tf_agents.agents.dqn import dqn_agent
+        from tf_agents.networks import q_network
+        from tf_agents.replay_buffers import tf_uniform_replay_buffer as replay
+        from tf_agents.policies import policy_saver
+        from tf_agents.metrics import py_metrics
+        from tf_agents.metrics import tf_metrics
+        from tf_agents.utils import common
+    except ImportError:
+        print("failed to import libraries")
+except ImportError:
+    print("failed to import tensorflow or numpy")
 
 
 class DqnAgent:
@@ -22,53 +31,88 @@ class DqnAgent:
     collect_steps_per_iteration = 1
     replay_buffer_max_length = 100000
 
-    # parts of our agent
-    env = None
-    agent = None
-    q_net = None
-    replay_buffer = None
-
-    initial_training = True
     initial_temperature = True
     initial_step = True
-    current_temperature = 0
-    previous_temperature = 0
-    temperature_delta = 0
+
+    devices = []
 
     def __init__(self):
-        self._init_env()
+        # Dictionaries that keep parts of DqnAgent for different devices
+        self.env = {}
+        self.train_env = {}
+        self.train_checkpointer = {}
+        self.policy_saver = {}
+        self.global_step = {}
+        self.agent = {}
+        self.q_net = {}
+        self.eval_policy = {}
+        self.collect_policy = {}
+        self.checkpoint_dirs = {}
+        self.policy_dirs = {}
+        self.replay_buffer = {}
+        self.initial_training = {}
 
-        # create a QNetwork
-        self.q_net = q_network.QNetwork(
-                self.train_env.observation_spec(),
-                self.train_env.action_spec())
+        self.checkpoint_dir = "checkpoints"
+        self.policy_dir = "policies"
 
-        # setup Deep Q Network agent.
-        optimizer = tf.compat.v1.train.AdamOptimizer(
-                learning_rate=self.learning_rate)
-        self.train_step_counter = tf.Variable(0)
-
-        self.agent = dqn_agent.DqnAgent(
-                self.train_env.time_step_spec(),
-                self.train_env.action_spec(),
-                q_network=self.q_net,
-                optimizer=optimizer,
-                td_errors_loss_fn=common.element_wise_squared_loss,
-                train_step_counter=self.train_step_counter)
-        self.agent.initialize()
-
-        self._init_policy(self.agent)
-        self._init_replay_buffer(self.agent, self.train_env)
         return
 
-    def _init_env(self):
+    def add_device(self, mac):
+        self.devices.append(mac)
+        self.initial_training[mac] = True
+
+        # construct directory names
+        self.checkpoint_dirs[mac] = os.path.join(self.checkpoint_dir, mac)
+        self.policy_dirs[mac] = os.path.join(self.policy_dir, mac)
+
+        # initialize environment for the device
+        self._init_env(mac)
+
+        # create the QNetwork for the device
+        self.q_net[mac] = q_network.QNetwork(
+                self.train_env[mac].observation_spec(),
+                self.train_env[mac].action_spec())
+
+        # create a global step (required for checkpoints)
+        self.global_step[mac] = tf.compat.v1.train.get_or_create_global_step()
+
+        self._init_agent(mac, self.learning_rate, self.q_net[mac],
+                         self.global_step[mac], self.train_env[mac])
+        self._init_policy(mac, self.agent[mac])
+        self._init_replay_buffer(mac, self.agent[mac], self.train_env[mac])
+        self._init_checkpointer(mac, self.agent[mac], self.replay_buffer[mac],
+                                self.global_step[mac])
+        self._init_policy_saver(mac, self.agent[mac])
+
+        logging.info("added a device with MAC = " + mac)
+        return
+
+    def _init_env(self, mac):
         """Will initialize a custom made Python Environment. This is a step
         zero for subsequent initializations.
         """
-        self.env = SensorEnv()
-        self.train_env = tf_py_environment.TFPyEnvironment(self.env)
+        self.env[mac] = SensorEnv(mac)
+        self.train_env[mac] = tf_py_environment.TFPyEnvironment(self.env[mac])
 
-    def _init_policy(self, agent):
+        return
+
+    def _init_agent(self, mac, learning_rate, q_net, train_step_counter,
+                    train_env):
+        optimizer = tf.compat.v1.train.AdamOptimizer(
+                learning_rate=learning_rate)
+
+        self.agent[mac] = dqn_agent.DqnAgent(
+                train_env.time_step_spec(),
+                train_env.action_spec(),
+                q_network=q_net,
+                optimizer=optimizer,
+                td_errors_loss_fn=common.element_wise_squared_loss,
+                train_step_counter=train_step_counter)
+        self.agent[mac].initialize()
+
+        return
+
+    def _init_policy(self, mac, agent):
         """
             - In our case, the desired outcome is to keep the temperature
             readings delta within boundaries of a pre-defined delta.
@@ -81,17 +125,41 @@ class DqnAgent:
             - agent.collect_policy is a second policy that is used for data
             collection.
         """
-        self.eval_policy = agent.policy
-        self.collect_policy = agent.collect_policy
+        self.eval_policy[mac] = agent.policy
+        self.collect_policy[mac] = agent.collect_policy
 
-    def _init_replay_buffer(self, agent, train_env):
+        return
+
+    def _init_replay_buffer(self, mac, agent, train_env):
         """Replay buffer keeps track of data collected from the environment.
         We will be using TFUniformReplayBuffer.
         """
-        self.replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
+        self.replay_buffer[mac] = replay.TFUniformReplayBuffer(
             data_spec=agent.collect_data_spec,
             batch_size=train_env.batch_size,
             max_length=self.replay_buffer_max_length)
+
+        return
+
+    def _init_checkpointer(self, mac, agent, replay_buffer, global_step):
+        """Create a checkpointer for a given device with identification of
+        a given MAC address. We will use this to save/load the training state
+        of the device.
+        """
+        self.train_checkpointer[mac] = common.Checkpointer(
+            ckpt_dir=self.checkpoint_dirs[mac],
+            max_to_keep=1,
+            agent=agent,
+            policy=agent.policy,
+            replay_buffer=replay_buffer,
+            global_step=global_step)
+
+        return
+
+    def _init_policy_saver(self, mac, agent):
+        self.policy_saver[mac] = policy_saver.PolicySaver(agent.policy)
+
+        return
 
     """
         Methods to process the environment.
@@ -128,28 +196,43 @@ class DqnAgent:
                                           next_time_step)
         buffer.add_batch(traj)
 
-    def train(self):
-        if self.initial_training:
-            self.agent.train_step_counter.assign(0)
-            self.initial_training = False
+    def train(self, mac):
+        """Here we run the training for the given device. The data is extracted
+        from the environment using collect_step and given to the network for
+        training. The trained networks checkpoint and policies are then saved.
+        """
 
-        for _ in range(26):
+        # don't allow training for devices that don't exist here.
+        if mac not in self.devices:
+            return
 
-            # collect a step
-            self.collect_step(self.train_env, self.agent.collect_policy,
-                              self.replay_buffer)
+        if self.initial_training[mac]:
+            self.agent[mac].train_step_counter.assign(0)
+            self.initial_training[mac] = False
+        else:
+            self.train_checkpointer[mac].initialize_or_restore()
+            self.global_step[mac] = tf.compat.v1.train.get_global_step()
 
-            dataset = self.replay_buffer.as_dataset(
-                num_parallel_calls=2,
-                sample_batch_size=2,
-                num_steps=2).prefetch(2)
-            iterator = iter(dataset)
+        # collect data
+        self.collect_step(self.train_env[mac], self.agent[mac].collect_policy,
+                          self.replay_buffer[mac])
 
-            experience, unused_info = next(iterator)
-            train_loss = self.agent.train(experience).loss
-            # print(train_loss)
-            # step = self.agent.train_step_counter.numpy()
+        dataset = self.replay_buffer[mac].as_dataset(
+            num_parallel_calls=2,
+            sample_batch_size=2,
+            num_steps=2).prefetch(2)
+        iterator = iter(dataset)
 
+        experience, unused_info = next(iterator)
+        _ = self.agent[mac].train(experience).loss
+
+        self.train_checkpointer[mac].save(self.global_step[mac])
+        self.policy_saver[mac].save(self.policy_dirs[mac])
+        # step = self.agent.train_step_counter.numpy()
+
+
+logging.basicConfig(level=logging.DEBUG)
 
 net = DqnAgent()
-net.train()
+net.add_device("test")
+net.train("test")
