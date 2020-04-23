@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 import os
 import json
+from hades_utils import num
 from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
@@ -115,10 +116,10 @@ class SensorEnv(py_environment.PyEnvironment):
             self._states[0] = data['stats']['prev_delta']
 
             previous_temperature = data['stats']['prev_temperature']
-            self._previous_temperature = self.num(previous_temperature)
+            self._previous_temperature = num(previous_temperature)
 
             current_temperature = data['stats']['curr_temperature']
-            self._current_temperature = self.num(current_temperature)
+            self._current_temperature = num(current_temperature)
 
         return
 
@@ -290,9 +291,3 @@ class SensorEnv(py_environment.PyEnvironment):
 
         # just in case return
         return reward, new_interval
-
-    def num(self, string):
-        try:
-            return float(string)
-        except ValueError:
-            return int(string)
