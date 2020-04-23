@@ -69,9 +69,9 @@ class Hades:
 
     def __init__(self, config):
         self.config = config
-        self.models_dir = "./models"
+        self.models_dir = "models"
         self.hermesPrefix = "hermes"
-        self.state_dir = "states"
+        self.states_dir = "states"
         self.dqn_agent = DqnAgent()
 
     """on_connect will be called when the MQTT client connects to the MQTT
@@ -129,23 +129,26 @@ class Hades:
             logging.error("There is no Temperature entry for %s", mac)
             return
 
-        state_file = os.path.join(self.state_dir, mac)
+        state_file = os.path.join(self.states_dir, mac)
         if os.path.exists(state_file):
             # first read what values exist already - we don't want to lose them
             with open(state_file, 'r') as json_file:
                 data = json.load(json_file)
                 prev_delta = hades_utils.num(data['stats']['prev_delta'])
                 prev_temp = hades_utils.num(data['stats']['prev_temperature'])
+                send_interval = hades_utils.num(data['stats']['send_interval'])
         else:
             # its the first statistic from the device -
             # default values, roll out!
             prev_temp = payload['temperature']
             prev_delta = 0
+            send_interval = 1
 
         data['stats'] = {
                 'prev_temperature': prev_temp,
                 'prev_delta': prev_delta,
-                'curr_temperature': payload['temperature']
+                'curr_temperature': payload['temperature'],
+                'send_interval': send_interval,
         }
 
         with open(state_file, 'w') as outfile:
@@ -171,10 +174,11 @@ class Hades:
 
         if not hades_utils.verify_mac(mac):
             logging.info("MAC address (%s) is invalid!", mac)
+            return
 
         # does a model for this device exist?
         if hades_utils.check_model(self.models_dir, mac):
-            modelMac = self.models_dir + "/" + mac + ".tflite"
+            modelMac = os.path.join(self.models_dir, mac)
 
             # prepare data
             f = open(modelMac, 'rb')
@@ -200,6 +204,47 @@ class Hades:
             self.client.publish(topicEvent, currentTime, 0)
         else:
             logging.info("no model for node (%s)", mac)
+        return
+
+    def on_request_send_interval(self, client, userdata, msg):
+        _, net, mac, _ = hades_utils.split_segments4(msg.topic)
+
+        if not hades_utils.verify_mac(mac):
+            logging.info("MAC address (%s) is invalid!", mac)
+            return
+
+        # does a state for this device exist?
+        if hades_utils.check_model(self.states_dir, mac):
+            state_file = os.path.join(self.states_dir, mac)
+
+            with open(state_file, 'r') as json_file:
+                data = json.load(json_file)
+                send_interval = hades_utils.num(data['stats']['send_interval'])
+
+            timeSent = time.localtime()
+            currentTime = json.dumps({
+                "model": mac,
+                "time_sent": time.strftime("%H:%M:%S", timeSent)
+            })
+
+            interval_msg = json.dumps({
+                "mac": mac,
+                "send_interval": send_interval,
+            })
+
+            # construct publish topics for hermes and iotctl.
+            topic = f"{self.hermesPrefix}/node/{net}/{mac}/hades/interval/recv"
+            topicEvent = f"node/{net}/{mac}/hades/event/sent"
+
+            logging.debug("publishing on %s", topic)
+            self.client.publish(topic, interval_msg, 0)
+
+            # Notify IoT Controller about a sent model
+            # TODO: implement an Event infrastructure.
+            logging.debug("publishing on %s", topicEvent)
+            self.client.publish(topicEvent, currentTime, 0)
+        else:
+            logging.info("no send interval for node (%s)", mac)
         return
 
     """on_ping will handle a request for a ping checking. A device may ask for

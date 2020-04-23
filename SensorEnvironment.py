@@ -121,6 +121,9 @@ class SensorEnv(py_environment.PyEnvironment):
             current_temperature = data['stats']['curr_temperature']
             self._current_temperature = num(current_temperature)
 
+            current_send_interval = data['stats']['send_interval']
+            self._current_send_interval = num(current_send_interval)
+
         return
 
     def save_env_state(self, mac, states):
@@ -137,7 +140,8 @@ class SensorEnv(py_environment.PyEnvironment):
         data['stats'] = {
             'prev_temperature': self._previous_temperature,
             'prev_delta': self._states[0],
-            'curr_temperature': self._current_temperature
+            'curr_temperature': self._current_temperature,
+            'send_interval': self._current_send_interval,
         }
 
         with open(state_file, 'w') as outfile:
