@@ -1,19 +1,18 @@
 #!/usr/bin/python
 
 import os
-import socket
 import logging
 import hades_utils
 import json
 import configparser
 import time
-from select import select
-from os import path
+from DqnAgent import DqnAgent
 
 try:
     import paho.mqtt.client as mqtt
 except ImportError:
     print("failed to import paho.mqtt.client")
+
 
 def start():
     logging.basicConfig(level=logging.DEBUG)
@@ -27,6 +26,7 @@ def start():
     client.main()
 
     return 0
+
 
 class HadesConfig:
 
@@ -57,6 +57,7 @@ class HadesConfig:
             self.mqtt["password"] = self.parser.get("MQTT", "Password")
             self.mqtt["server"] = self.parser.get("MQTT", "Server")
             self.mqtt["port"] = self.parser.getint("MQTT", "Port")
+            self.mqtt["clientid"] = self.parser.get("MQTT", "ClientID")
 
     def getMqttConfig(self):
         return self.mqtt
@@ -68,9 +69,10 @@ class Hades:
 
     def __init__(self, config):
         self.config = config
-        self.client_id="hades"
-        self.models_dir="./models"
+        self.models_dir = "./models"
         self.hermesPrefix = "hermes"
+        self.state_dir = "states"
+        self.dqn_agent = DqnAgent()
 
     """on_connect will be called when the MQTT client connects to the MQTT
     broker.
@@ -109,16 +111,52 @@ class Hades:
     """on_stats will handle the received messages of a devices statistics,
     when data is received, it will send this data for analyze.
 
-    endpoint: /hades/+/+/statistics
+    endpoint: hades/+/+/statistics
     """
     def on_stats(self, client, userdata, msg):
-        # json.loads(msg.payload)
-        _, net, mac, _ = hades_utils.split_segments4(msg.topic)
+        data = {}
 
+        _, net, mac, _ = hades_utils.split_segments4(msg.topic)
         if not hades_utils.verify_mac(mac):
             logging.info("MAC address (%s) is invalid!", mac)
+            return
+        else:
+            logging.info("Received statistics for %s", mac)
 
-        # call keras for model relearning
+        # parse the currently read temperature
+        payload = json.loads(msg.payload)
+        if payload['temperature'] is None:
+            logging.error("There is no Temperature entry for %s", mac)
+            return
+
+        state_file = os.path.join(self.state_dir, mac)
+        if os.path.exists(state_file):
+            # first read what values exist already - we don't want to lose them
+            with open(state_file, 'r') as json_file:
+                data = json.load(json_file)
+                prev_delta = hades_utils.num(data['stats']['prev_delta'])
+                prev_temp = hades_utils.num(data['stats']['prev_temperature'])
+        else:
+            # its the first statistic from the device -
+            # default values, roll out!
+            prev_temp = payload['temperature']
+            prev_delta = 0
+
+        data['stats'] = {
+                'prev_temperature': prev_temp,
+                'prev_delta': prev_delta,
+                'curr_temperature': payload['temperature']
+        }
+
+        with open(state_file, 'w') as outfile:
+            json.dump(data, outfile)
+
+        # at this point we should have dumped the received statistics to the
+        # state file - we can start the training.
+        if self.dqn_agent.device_exists(mac) is not True:
+            self.dqn_agent.add_device(mac)
+
+        self.dqn_agent.train(mac)
 
         return
 
@@ -163,7 +201,7 @@ class Hades:
         else:
             logging.info("no model for node (%s)", mac)
         return
-    
+
     """on_ping will handle a request for a ping checking. A device may ask for
     a ping check and we should respond to it.
     """
@@ -192,9 +230,9 @@ class Hades:
         self.t = time.time()
         self.state = 0
 
-        self.client = mqtt.Client(client_id=self.client_id)
+        self.client = mqtt.Client(client_id=mqttConfig["clientid"])
         self.client.on_log = self.on_log
-        #self.client.enable_logger(logger=logging)
+        # self.client.enable_logger(logger=logging)
 
         self.subscribe()
 
@@ -203,20 +241,20 @@ class Hades:
         self.client.on_disconnect = self.on_disconnect
         self.client.on_message = self.on_message
 
-        logging.info("mqtt client connecting to %s:%d", mqttConfig["server"], mqttConfig["port"])
+        logging.info("mqtt client connecting to %s:%d", mqttConfig["server"],
+                     mqttConfig["port"])
 
         # Handle connections
         self.client.username_pw_set(mqttConfig["user"], mqttConfig["password"])
-        try:
-            self.client.connect(mqttConfig["server"], int(mqttConfig["port"]))
-        except:
-            logging.error("failed to initialize MQTT client")
-            self.client = None
+        self.client.connect(mqttConfig["server"], int(mqttConfig["port"]))
+
+        if self.client is None:
             return
 
         while True:
             self.client.loop_forever()
         return
+
 
 # Main entry point
 if __name__ == '__main__':
