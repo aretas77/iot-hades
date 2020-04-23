@@ -1,10 +1,10 @@
 import numpy as np
 import tensorflow as tf
-from tf_agents.environments import tf_py_environment
+import os
+import json
 from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
-from tf_agents.networks import q_network
 
 tf.compat.v1.enable_v2_behavior()
 
@@ -27,17 +27,23 @@ class SensorEnv(py_environment.PyEnvironment):
     REWARD_DO_NOTHING = np.asarray(0., dtype=np.float32)
     REWARD_OUT_OF_BOUNDS = np.asarray(-2., dtype=np.float32)
 
-    REWARD_CORRECT_ACTION = np.assarray(1., dtype=np.float32)
+    REWARD_CORRECT_ACTION = np.asarray(1., dtype=np.float32)
     REWARD_INCORRECT_ACTION = np.asarray(-2., dtype=np.float32)
 
     REWARD_WITHIN_BOUNDS.setflags(write=False)
     REWARD_OUT_OF_BOUNDS.setflags(write=False)
     REWARD_DO_NOTHING.setflags(write=False)
+
     REWARD_INCORRECT_ACTION.setflags(write=False)
     REWARD_CORRECT_ACTION.setflags(write=False)
 
-    def __init__(self, discount=0.5, delta=3):
+    def __init__(self, mac, discount=0.5, delta=3):
         super(SensorEnv, self).__init__()
+
+        # the environment of a given device with a MAC address.
+        self._mac = mac
+        self._iteration = 0
+        self.state_dir = "states"
 
         # three actions are allowed for reading time modification:
         #   0. Do nothing
@@ -76,7 +82,8 @@ class SensorEnv(py_environment.PyEnvironment):
         #     value.
         self._states = [0]
         self._current_send_interval = 0
-        self._previous_temperature = 0.0
+        self._previous_temperature = -999
+        self._current_temperature = -999
         self._line = 1
         self._episode_ended = False
 
@@ -95,31 +102,59 @@ class SensorEnv(py_environment.PyEnvironment):
         """
         return self._observation_spec
 
-    def get_state(self) -> ts.TimeStep:
-        return self._current_time_step
-
-    def set_state(self, time_step: ts.TimeStep):
-        self._current_time_step = time_step
-        self._states = time_step.observation
-
     def _reset(self):
         self._states = [0]
         self._episode_ended = False
         return ts.restart(np.array(self._states, dtype=np.float32))
 
+    def load_env_state(self, mac):
+        state_file = os.path.join(self.state_dir, mac)
+
+        with open(state_file, 'r') as json_file:
+            data = json.load(json_file)
+            self._states[0] = data['stats']['prev_delta']
+
+            previous_temperature = data['stats']['prev_temperature']
+            self._previous_temperature = self.num(previous_temperature)
+
+            current_temperature = data['stats']['curr_temperature']
+            self._current_temperature = self.num(current_temperature)
+
+        return
+
+    def save_env_state(self, mac, states):
+        """We save important environment values in a json dump file for later
+        reuse. As when using a Checkpointer it doesn't save environment values.
+
+        Args:
+            mac: the MAC address of the device whose state we save.
+            states: the state of the environment.
+        """
+        state_file = os.path.join(self.state_dir, mac)
+
+        data = {}
+        data['stats'] = {
+            'prev_temperature': self._previous_temperature,
+            'prev_delta': self._states[0],
+            'curr_temperature': self._current_temperature
+        }
+
+        with open(state_file, 'w') as outfile:
+            json.dump(data, outfile)
+
+        return
+
     def _step(self, action):
-        f = open("recv/AA:BB:CC:DD:EE:FF.txt", "r")
-        temperature = 0.0
-        for _ in range(self._line):
-            temperature = self.num(f.readline())
-        f.close()
+        self._iteration += 1
+        self.load_env_state(self._mac)
 
-        if self._line == 1:
-            self._previous_temperature = temperature
+        # check if this is a first iteration
+        if self._previous_temperature == -999:
+            self._previous_temperature = self._current_temperature
 
-        self._states[0] = abs(self._previous_temperature - temperature)
-        self._previous_temperature = temperature
-        self._line += 1
+        self._states[0] = abs(self._previous_temperature -
+                              self._current_temperature)
+        self._previous_temperature = self._current_temperature
 
         # we shouldn't enter this, unless we do it manually
         if self._episode_ended or self._current_time_step.is_last():
@@ -137,6 +172,12 @@ class SensorEnv(py_environment.PyEnvironment):
             reward, self._current_send_interval = self._check_calculated(
                 self._states, self._delta, new_interval, reward,
                 self._current_send_interval)
+
+        # we save save the environment every other iteration.
+        # XXX: figure out the logic behind training the network and why we
+        # take two steps, that is - current and next observation.
+        if self._iteration % 2 == 0:
+            self.save_env_state(self._mac, self._states)
 
         # terminate immediatly
         return ts.transition(np.array(self._states, dtype=np.float32), reward,
