@@ -47,7 +47,13 @@ class DqnAgent:
         self.checkpoint_dir = "checkpoints"
         self.policy_dir = "policies"
 
+        logging.info("initialized DqnAgent")
         return
+
+    def device_exists(self, mac):
+        if mac in self.devices:
+            return True
+        return False
 
     def add_device(self, mac):
         self.devices.append(mac)
@@ -156,6 +162,25 @@ class DqnAgent:
 
         return
 
+    def convert_to_tflite(self, mac):
+        """convert_to_tflite loads up the policy of the MAC address and tries
+        to convert it to the TensorFlow Lite model using concrete function for
+        policy 'action'. However, in current TensorFlow Lite implementation
+        some ops used here are not yet supported: BroadcastArgs and BroadcastTo
+        """
+        export_dir = os.path.join(self.policy_dir, mac)
+
+        model = tf.saved_model.load(export_dir=export_dir)
+        concrete_func = model.signatures['action']
+
+        converter = tf.lite.TFLiteConverter.from_concrete_functions(
+            [concrete_func])
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS,
+                                               tf.lite.OpsSet.SELECT_TF_OPS]
+        tflite_model = converter.convert()
+        model_dir = os.path.join('models', mac)
+        open(model_dir, 'wb').write(tflite_model)
+
     def collect_step(self, env, policy, buffer):
         """Collects the current time step of the environment and maps the
         current time_step to action in Q-table.
@@ -208,4 +233,4 @@ class DqnAgent:
 
         self.train_checkpointer[mac].save(self.global_step[mac])
         self.policy_saver[mac].save(self.policy_dirs[mac])
-        # step = self.agent[mac].train_step_counter.numpy()
+        self.convert_to_tflite(mac)
