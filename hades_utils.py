@@ -24,7 +24,7 @@ def check_model(models_dir, mac):
     """check_mode will check whether a model exists for a particular device and
     will return True if it does exist.
     """
-    return path.exists(models_dir + "/" + mac + ".tflite")
+    return path.exists(models_dir + "/" + mac)
 
 
 def num(string):

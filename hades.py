@@ -83,6 +83,7 @@ class Hades:
         # Handle subscriptions
         self.client.subscribe("hades/+/+/+", 0)
         self.client.subscribe("hades/+/+/model/+", 0)
+        self.client.subscribe("hades/+/+/interval/+", 0)
 
     """subscribe will subscribe all required topics with their respective
     handlers for MQTT.
@@ -91,7 +92,8 @@ class Hades:
         topics = {
             "hades/+/+/statistics": self.on_stats,
             "hades/+/+/ping": self.on_ping,
-            "hades/+/+/model/request": self.on_request
+            "hades/+/+/model/request": self.on_request,
+            "hades/+/+/interval/request": self.on_request_send_interval,
         }
 
         # subscribe to the given topic list
@@ -207,6 +209,12 @@ class Hades:
         return
 
     def on_request_send_interval(self, client, userdata, msg):
+        """on_request will handle a request for a new model. A server may ask for
+        a new model via this handler and the handler should respond with a new
+        model.
+
+        endpoint: /hades/+/+/interval/request
+        """
         _, net, mac, _ = hades_utils.split_segments4(msg.topic)
 
         if not hades_utils.verify_mac(mac):
@@ -224,7 +232,8 @@ class Hades:
             timeSent = time.localtime()
             currentTime = json.dumps({
                 "model": mac,
-                "time_sent": time.strftime("%H:%M:%S", timeSent)
+                "time_sent": time.strftime("%H:%M:%S", timeSent),
+                "send_interval": send_interval,
             })
 
             interval_msg = json.dumps({
