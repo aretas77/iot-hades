@@ -44,7 +44,7 @@ class SensorEnv(py_environment.PyEnvironment):
         # the environment of a given device with a MAC address.
         self._mac = mac
         self._iteration = 0
-        self.state_dir = "states"
+        self._state_dir = "states"
 
         # three actions are allowed for reading time modification:
         #   0. Do nothing
@@ -109,7 +109,7 @@ class SensorEnv(py_environment.PyEnvironment):
         return ts.restart(np.array(self._states, dtype=np.float32))
 
     def load_env_state(self, mac):
-        state_file = os.path.join(self.state_dir, mac)
+        state_file = os.path.join(self._state_dir, mac)
 
         with open(state_file, 'r') as json_file:
             data = json.load(json_file)
@@ -134,7 +134,7 @@ class SensorEnv(py_environment.PyEnvironment):
             mac: the MAC address of the device whose state we save.
             states: the state of the environment.
         """
-        state_file = os.path.join(self.state_dir, mac)
+        state_file = os.path.join(self._state_dir, mac)
 
         data = {}
         data['stats'] = {
