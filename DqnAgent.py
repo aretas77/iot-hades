@@ -25,10 +25,10 @@ class DqnAgent:
     log_interval = 1
     collect_steps_per_iteration = 1
     replay_buffer_max_length = 100000
-    initial_step = True
 
     def __init__(self):
         # Dictionaries that keep parts of DqnAgent for different devices
+        # XXX: this whole class is a mess - optimizations non-existant.
         self.devices = []
         self.env = {}
         self.train_env = {}
@@ -43,6 +43,7 @@ class DqnAgent:
         self.policy_dirs = {}
         self.replay_buffer = {}
         self.initial_training = {}
+        self.initial_step = {}
 
         self.checkpoint_dir = "checkpoints"
         self.policy_dir = "policies"
@@ -58,6 +59,7 @@ class DqnAgent:
     def add_device(self, mac):
         self.devices.append(mac)
         self.initial_training[mac] = True
+        self.initial_step[mac] = True
 
         # construct directory names
         self.checkpoint_dirs[mac] = os.path.join(self.checkpoint_dir, mac)
@@ -181,12 +183,12 @@ class DqnAgent:
         model_dir = os.path.join('models', mac)
         open(model_dir, 'wb').write(tflite_model)
 
-    def collect_step(self, env, policy, buffer):
+    def collect_step(self, env, policy, buffer, mac):
         """Collects the current time step of the environment and maps the
         current time_step to action in Q-table.
         """
-        if self.initial_step:
-            self.initial_step = False
+        if self.initial_step[mac]:
+            self.initial_step[mac] = False
             time_step = env.current_time_step()
             action_step = policy.action(time_step)
             next_time_step = env.step(action_step.action)
@@ -220,7 +222,7 @@ class DqnAgent:
 
         # collect data
         self.collect_step(self.train_env[mac], self.agent[mac].collect_policy,
-                          self.replay_buffer[mac])
+                          self.replay_buffer[mac], mac)
 
         dataset = self.replay_buffer[mac].as_dataset(
             num_parallel_calls=2,
