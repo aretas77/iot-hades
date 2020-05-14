@@ -1,6 +1,8 @@
 IoT hades
 ------------------------
 
-Used libraries
+Requirements:
 
-pip install tensorflow
+1. numpy
+2. keras
+3. Tensorflow Lite

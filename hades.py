@@ -117,6 +117,7 @@ class Hades:
     """
     def on_stats(self, client, userdata, msg):
         data = {}
+        first = False
 
         _, net, mac, _ = hades_utils.split_segments4(msg.topic)
         if not hades_utils.verify_mac(mac):
@@ -159,9 +160,14 @@ class Hades:
         # at this point we should have dumped the received statistics to the
         # state file - we can start the training.
         if self.dqn_agent.device_exists(mac) is not True:
+            first = True
             self.dqn_agent.add_device(mac)
 
         self.dqn_agent.train(mac)
+
+        # if it was a first request - send a new interval
+        if first is True:
+            self.send_interval(net, mac)
 
         return
 
@@ -221,6 +227,12 @@ class Hades:
             logging.info("MAC address (%s) is invalid!", mac)
             return
 
+        self.send_interval(net, mac)
+        return
+
+    def send_interval(self, net, mac):
+        hermesPrefix = self.hermesPrefix
+
         # does a state for this device exist?
         if hades_utils.check_model(self.states_dir, mac):
             state_file = os.path.join(self.states_dir, mac)
@@ -234,15 +246,15 @@ class Hades:
                 "model": mac,
                 "time_sent": time.strftime("%H:%M:%S", timeSent),
                 "send_interval": send_interval,
-            })
+                })
 
             interval_msg = json.dumps({
                 "mac": mac,
                 "send_interval": send_interval,
-            })
+                })
 
             # construct publish topics for hermes and iotctl.
-            topic = f"{self.hermesPrefix}/node/{net}/{mac}/hades/interval/recv"
+            topic = f"{hermesPrefix}/node/{net}/{mac}/hades/interval/receive"
             topicEvent = f"node/{net}/{mac}/hades/event/sent"
 
             logging.debug("publishing on %s", topic)
