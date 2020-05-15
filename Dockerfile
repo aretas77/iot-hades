@@ -1,11 +1,9 @@
 FROM python:3
 
-RUN apt-get update
+RUN apt-get update && apt-get install bash
+RUN pip3 install tensorflow numpy tf-agents paho-mqtt
 
 WORKDIR /app
-
-RUN pip3 install tensorflow numpy tf-agents
-
 COPY . /app
 
-ENTRYPOINT [ "/bin/bash", "./start.sh" ]
+#ENTRYPOINT [ "/bin/bash", "./start.sh" ]
